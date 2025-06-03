@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Visualização de Árvore de Receitas</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+    #controls {
+      margin-bottom: 20px;
+    }
+    #graph {
+      border: 1px solid #ccc;
+      width: 100%;
+      height: 800px;
+      cursor: move; /* Indica que dá para arrastar (pan) */
+    }
+    .link {
+      fill: none;
+      stroke: #999;
+      stroke-width: 1.5px;
+    }
+    .node circle {
+      stroke: #555;
+      stroke-width: 1.5px;
+      fill: #eee;
+    }
+    .node text {
+      font-size: 12px;
+      pointer-events: none;
+      user-select: none;
+    }
+  </style>
+  <!-- Inclui D3.js via CDN -->
+  <script src="https://d3js.org/d3.v6.min.js"></script>
+</head>
+<body>
+  <div id="controls">
+    <label for="qtyInput">Quantas "Porta Reforçada" você quer?</label>
+    <input type="number" id="qtyInput" value="1" min="1" style="width: 60px;" />
+    <button id="updateBtn">Atualizar Árvore</button>
+  </div>
+  <svg style="width: 100%; height: 80vh;" id="graph"></svg>
+
+  <script>
+    // ---------- 1) Dados do grafo (DAG) com quantidades ----------
+    const rawData = {
+      "Porta Reforçada": [
+        { item: "Painel de Madeira Reforçado", qty: 2 },
+        { item: "Dobradiça Metálica",         qty: 2 },
+        { item: "Maçaneta com Tranca",        qty: 1 }
+      ],
+      "Painel de Madeira Reforçado": [
+        { item: "Tábua de Madeira",           qty: 3 },
+        { item: "Cola de Madeira Industrial", qty: 2 },
+        { item: "Parafuso",                   qty: 4 }
+      ],
+      "Tábua de Madeira": [
+        { item: "Madeira Bruta", qty: 1 }
+      ],
+      "Cola de Madeira Industrial": [
+        { item: "Resina",         qty: 1 },
+        { item: "Aditivo Químico", qty: 1 }
+      ],
+      "Dobradiça Metálica": [
+        { item: "Peça de Metal Dobrada", qty: 1 },
+        { item: "Parafuso",             qty: 2 },
+        { item: "Pino de Metal",        qty: 1 }
+      ],
+      "Peça de Metal Dobrada": [
+        { item: "Chapa de Aço",     qty: 1 },
+        { item: "Máquina de Dobrar", qty: 1 }
+      ],
+      "Parafuso": [
+        { item: "Barra de Metal", qty: 1 },
+        { item: "Rosqueadeira",   qty: 1 }
+      ],
+      "Pino de Metal": [
+        { item: "Barra de Metal", qty: 1 },
+        { item: "Torno",          qty: 1 }
+      ],
+      "Maçaneta com Tranca": [
+        { item: "Maçaneta",        qty: 1 },
+        { item: "Tranca Mecânica", qty: 1 }
+      ],
+      "Maçaneta": [
+        { item: "Liga de Alumínio", qty: 1 },
+        { item: "Moldura Plástica", qty: 1 }
+      ],
+      "Tranca Mecânica": [
+        { item: "Cilindro",       qty: 1 },
+        { item: "Mola",           qty: 2 },
+        { item: "Parafuso Pequeno", qty: 4 }
+      ],
+      "Cilindro": [
+        { item: "Tubo Metálico",    qty: 1 },
+        { item: "Núcleo de Bronze", qty: 1 }
+      ],
+      "Mola": [
+        { item: "Arame de Aço",      qty: 1 },
+        { item: "Enrolador de Molas", qty: 1 }
+      ]
+    };
+
+    // ---------- 2) Constrói mapa de nós e arestas apenas para cálculo de quantidades ----------
+    function buildGraphData() {
+      const nodesMap = new Map();
+      const links = [];
+
+      Object.keys(rawData).forEach(parentName => {
+        if (!nodesMap.has(parentName)) {
+          nodesMap.set(parentName, { id: parentName, totalQty: 0 });
+        }
+        rawData[parentName].forEach(({ item: childName, qty }) => {
+          if (!nodesMap.has(childName)) {
+            nodesMap.set(childName, { id: childName, totalQty: 0 });
+          }
+          links.push({
+            source: parentName,
+            target: childName,
+            weight: qty
+          });
+        });
+      });
+
+      const nodes = Array.from(nodesMap.values());
+      return { nodes, links, nodesMap };
+    }
+
+    // ---------- 3) Computa quantidades totais por nó a partir da raiz ----------
+    function computeQuantities(rootName, rootQty, nodesMap) {
+      // Zera totais antes de computar
+      nodesMap.forEach(node => {
+        node.totalQty = 0;
+      });
+
+      // Fila para BFS
+      const queue = [ { name: rootName, needed: rootQty } ];
+      nodesMap.get(rootName).totalQty = rootQty;
+
+      while (queue.length > 0) {
+        const { name, needed } = queue.shift();
+        const children = rawData[name] || [];
+
+        children.forEach(({ item: childName, qty }) => {
+          const childNeeded = needed * qty;
+          const childNode = nodesMap.get(childName);
+          childNode.totalQty += childNeeded;
+          queue.push({ name: childName, needed: childNeeded });
+        });
+      }
+    }
+
+    // ---------- 4) Constrói estrutura hierárquica (para D3.hierarchy) ----------
+    function buildHierarchy(nodeName, nodesMap) {
+      // Cria o nó atual
+      const nodeData = {
+        id: nodeName,
+        totalQty: nodesMap.get(nodeName).totalQty,
+        children: []
+      };
+      // Para cada filho no rawData, constrói recursivamente
+      const children = rawData[nodeName] || [];
+      children.forEach(({ item: childName }) => {
+        nodeData.children.push(buildHierarchy(childName, nodesMap));
+      });
+      return nodeData;
+    }
+
+    // ---------- 5) Desenha/atualiza a árvore no SVG ----------
+    function drawTree(rootQty) {
+      // 5.1) Reconstrói dados e calcula quantidades
+      const { nodes, links, nodesMap } = buildGraphData();
+      computeQuantities("Porta Reforçada", rootQty, nodesMap);
+      const hierarchyData = buildHierarchy("Porta Reforçada", nodesMap);
+
+      // 5.2) Seleciona SVG e limpa conteúdo anterior
+      const svg = d3.select("#graph");
+      svg.selectAll("*").remove();
+
+      // 5.3) Define dimensões e margens
+      const width = +svg.attr("width") || svg.node().clientWidth;
+      const height = +svg.attr("height") || svg.node().clientHeight;
+      const margin = { top: 40, right: 40, bottom: 40, left: 40 };
+      const innerWidth = width - margin.left - margin.right;
+      const innerHeight = height - margin.top - margin.bottom;
+
+      // 5.4) Cria grupo que será alvo do zoom
+      const container = svg
+        .append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+      // 5.5) Configura zoom e pan
+      const zoomBehavior = d3.zoom()
+        .scaleExtent([0.5, 2])
+        .on("zoom", (event) => {
+          container.attr("transform", event.transform);
+        });
+      svg.call(zoomBehavior);
+
+      // 5.6) Cria layout de árvore
+      const root = d3.hierarchy(hierarchyData, d => d.children);
+      const treeLayout = d3.tree().size([innerWidth, innerHeight]);
+      treeLayout(root);
+
+      // 5.7) Desenha links (arestas) com caminho vertical
+      container.selectAll("path.link")
+        .data(root.links())
+        .enter()
+        .append("path")
+        .attr("class", "link")
+        .attr("d", d3.linkVertical()
+          .x(d => d.x)
+          .y(d => d.y)
+        );
+
+      // 5.8) Desenha nós
+      const nodeGroup = container.selectAll("g.node")
+        .data(root.descendants())
+        .enter()
+        .append("g")
+        .attr("class", "node")
+        .attr("transform", d => `translate(${d.x},${d.y})`);
+
+      // 5.9) Círculo para cada nó (raiz maior)
+      nodeGroup.append("circle")
+        .attr("r", d => d.depth === 0 ?  thirty() : 20);
+
+      // 5.10) Texto com o nome do item (acima do círculo)
+      nodeGroup.append("text")
+        .attr("dy", d => d.depth === 0 ? "-2.0em" : "-1.2em")
+        .attr("text-anchor", "middle")
+        .text(d => d.data.id);
+
+      // 5.11) Texto com quantidade total (abaixo do círculo)
+      nodeGroup.append("text")
+        .attr("dy", d => d.depth === 0 ? "2.2em" : "1em")
+        .attr("text-anchor", "middle")
+        .text(d => `Qtd: ${d.data.totalQty}`);
+
+      // Função para retornar 30 ou 20 (não usar número direto no attr)
+      function thirty() { return 30; }
+    }
+
+    // ---------- 6) Inicializa árvore com 1 "Porta Reforçada" ----------
+    drawTree(1);
+
+    // ---------- 7) Atualiza ao clicar no botão ----------
+    document.getElementById("updateBtn").addEventListener("click", () => {
+      const inputVal = parseInt(document.getElementById("qtyInput").value, 10);
+      const qty = isNaN(inputVal) || inputVal < 1 ? 1 : inputVal;
+      drawTree(qty);
+    });
+  </script>
+</body>
+</html>
