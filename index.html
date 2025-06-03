@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <title>Visualização de Árvore de Receitas</title>
+  <title>Visualização de Árvore e Radial de Receitas</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -11,11 +11,12 @@
     #controls {
       margin-bottom: 20px;
     }
-    #graph {
+    svg {
       border: 1px solid #ccc;
       width: 100%;
-      height: 800px;
+      height: 45vh;
       cursor: move; /* Indica que dá para arrastar (pan) */
+      margin-bottom: 20px;
     }
     .link {
       fill: none;
@@ -40,9 +41,13 @@
   <div id="controls">
     <label for="qtyInput">Quantas "Porta Reforçada" você quer?</label>
     <input type="number" id="qtyInput" value="1" min="1" style="width: 60px;" />
-    <button id="updateBtn">Atualizar Árvore</button>
+    <button id="updateBtn">Atualizar Visualizações</button>
   </div>
-  <svg style="width: 100%; height: 80vh;" id="graph"></svg>
+
+  <!-- SVG da visualização em árvore -->
+  <svg id="treeGraph"></svg>
+  <!-- SVG da visualização radial ("átomo") -->
+  <svg id="radialGraph"></svg>
 
   <script>
     // ---------- 1) Dados do grafo (DAG) com quantidades ----------
@@ -155,13 +160,11 @@
 
     // ---------- 4) Constrói estrutura hierárquica (para D3.hierarchy) ----------
     function buildHierarchy(nodeName, nodesMap) {
-      // Cria o nó atual
       const nodeData = {
         id: nodeName,
         totalQty: nodesMap.get(nodeName).totalQty,
         children: []
       };
-      // Para cada filho no rawData, constrói recursivamente
       const children = rawData[nodeName] || [];
       children.forEach(({ item: childName }) => {
         nodeData.children.push(buildHierarchy(childName, nodesMap));
@@ -169,20 +172,20 @@
       return nodeData;
     }
 
-    // ---------- 5) Desenha/atualiza a árvore no SVG ----------
+    // ---------- 5) Desenha/atualiza a árvore no SVG #treeGraph ----------
     function drawTree(rootQty) {
       // 5.1) Reconstrói dados e calcula quantidades
-      const { nodes, links, nodesMap } = buildGraphData();
+      const { nodesMap } = buildGraphData();
       computeQuantities("Porta Reforçada", rootQty, nodesMap);
       const hierarchyData = buildHierarchy("Porta Reforçada", nodesMap);
 
       // 5.2) Seleciona SVG e limpa conteúdo anterior
-      const svg = d3.select("#graph");
+      const svg = d3.select("#treeGraph");
       svg.selectAll("*").remove();
 
       // 5.3) Define dimensões e margens
-      const width = +svg.attr("width") || svg.node().clientWidth;
-      const height = +svg.attr("height") || svg.node().clientHeight;
+      const width = svg.node().clientWidth;
+      const height = svg.node().clientHeight;
       const margin = { top: 40, right: 40, bottom: 40, left: 40 };
       const innerWidth = width - margin.left - margin.right;
       const innerHeight = height - margin.top - margin.bottom;
@@ -226,32 +229,112 @@
 
       // 5.9) Círculo para cada nó (raiz maior)
       nodeGroup.append("circle")
-        .attr("r", d => d.depth === 0 ?  thirty() : 20);
+        .attr("r", d => d.depth === 0 ? 30 : 20);
 
       // 5.10) Texto com o nome do item (acima do círculo)
       nodeGroup.append("text")
-        .attr("dy", d => d.depth === 0 ? "-2.0em" : "-1.2em")
+        .attr("dy", d => d.depth === 0 ? "-2.2em" : "-1.2em")
         .attr("text-anchor", "middle")
         .text(d => d.data.id);
 
       // 5.11) Texto com quantidade total (abaixo do círculo)
       nodeGroup.append("text")
-        .attr("dy", d => d.depth === 0 ? "2.2em" : "1em")
+        .attr("dy", d => d.depth === 0 ? "2.4em" : "1em")
         .attr("text-anchor", "middle")
         .text(d => `Qtd: ${d.data.totalQty}`);
-
-      // Função para retornar 30 ou 20 (não usar número direto no attr)
-      function thirty() { return 30; }
     }
 
-    // ---------- 6) Inicializa árvore com 1 "Porta Reforçada" ----------
-    drawTree(1);
+    // ---------- 6) Desenha/atualiza a visualização radial no SVG #radialGraph ----------
+    function drawRadial(rootQty) {
+      // 6.1) Reconstrói dados e calcula quantidades
+      const { nodesMap } = buildGraphData();
+      computeQuantities("Porta Reforçada", rootQty, nodesMap);
+      const hierarchyData = buildHierarchy("Porta Reforçada", nodesMap);
 
-    // ---------- 7) Atualiza ao clicar no botão ----------
+      // 6.2) Seleciona SVG e limpa conteúdo anterior
+      const svg = d3.select("#radialGraph");
+      svg.selectAll("*").remove();
+
+      // 6.3) Define dimensões e margens
+      const width = svg.node().clientWidth;
+      const height = svg.node().clientHeight;
+      // Raio máximo para a árvore radial (centralizado)
+      const radius = Math.min(width, height) / 2 + 200;
+
+      // 6.4) Cria grupo centralizado que será alvo do zoom
+      const container = svg
+        .append("g")
+        .attr("transform", `translate(${width / 2},${height / 2})`);
+
+      // 6.5) Configura zoom e pan (para o container central)
+      const zoomBehavior = d3.zoom()
+        .scaleExtent([0.5, 2])
+        .on("zoom", (event) => {
+          container.attr("transform", `translate(${width / 2 + event.transform.x},${height / 2 + event.transform.y}) scale(${event.transform.k})`);
+        });
+      svg.call(zoomBehavior);
+
+      // 6.6) Cria layout de árvore radial
+      const root = d3.hierarchy(hierarchyData, d => d.children);
+      const radialTree = d3.tree().size([2 * Math.PI, radius]);
+      radialTree(root);
+
+      // 6.7) Desenha links (arestas) em radial
+      container.selectAll("path.link")
+        .data(root.links())
+        .enter()
+        .append("path")
+        .attr("class", "link")
+        .attr("d", d3.linkRadial()
+          .angle(d => d.x)
+          .radius(d => d.y)
+        );
+
+      // 6.8) Desenha nós
+      const nodeGroup = container.selectAll("g.node")
+        .data(root.descendants())
+        .enter()
+        .append("g")
+        .attr("class", "node")
+        .attr("transform", d => {
+          const angle = d.x - Math.PI / 2;
+          const r = d.y;
+          const x = r * Math.cos(angle);
+          const y = r * Math.sin(angle);
+          return `translate(${x},${y})`;
+        });
+
+      // 6.9) Círculo para cada nó (raiz maior)
+      nodeGroup.append("circle")
+        .attr("r", d => d.depth === 0 ? 20 : 12);
+
+      // 6.10) Texto com o nome do item (posicionado um pouco para fora do nó)
+      nodeGroup.append("text")
+        .attr("dy", d => d.depth === 0 ? "-1.6em" : d.x < Math.PI ? "-1em" : "1.6em")
+        .attr("dx", d => {
+          // Se estiver abaixo do centro (ângulo > 90° e < 270°), inverta o alinhamento
+          return d.x < Math.PI ? "0" : "0";
+        })
+        .attr("text-anchor", "middle")
+        .text(d => d.data.id);
+
+      // 6.11) Texto com quantidade total (logo abaixo do rótulo)
+      nodeGroup.append("text")
+        .attr("dy", d => d.depth === 0 ? "2.0em" : d.x < Math.PI ? "1.2em" : "-2.0em")
+        .attr("text-anchor", "middle")
+        .text(d => `Qtd: ${d.data.totalQty}`);
+    }
+
+    // ---------- 7) Inicializa ambas visualizações com 1 "Porta Reforçada" ----------
+    drawTree(1);
+    drawRadial(1);
+
+    // ---------- 8) Atualiza ambas ao clicar no botão ----------
     document.getElementById("updateBtn").addEventListener("click", () => {
       const inputVal = parseInt(document.getElementById("qtyInput").value, 10);
       const qty = isNaN(inputVal) || inputVal < 1 ? 1 : inputVal;
       drawTree(qty);
+      drawRadial(qty);
     });
   </script>
 </body>
